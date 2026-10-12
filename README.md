@@ -101,16 +101,24 @@ Ripple supports Windows and macOS desktop usage. Subscriptions, articles, notes,
 | Packaging | Electron Builder, PyInstaller |
 | AI Integration | OpenAI-compatible API, Ollama, vLLM, local embedding services |
 
-When the desktop app starts, Ripple launches a local backend service automatically and connects the frontend to the local API. User data is stored in the operating system's application data directory.
+When the desktop app starts, Ripple launches a local backend service automatically and connects the frontend to the local API. Installed Windows builds keep all persistent user state inside the selected installation directory; macOS, Linux and development runs retain their existing data locations.
 
 ## Installation
 
 ### Windows
 
 1. Download the latest `Ripple Setup x.x.x.exe` from `release/` or GitHub Releases.
-2. Run the installer and follow the setup wizard.
+2. Run the installer as the current user and choose a writable dedicated directory on a local fixed disk. Other drive letters, Unicode and spaces are supported; network paths, removable disks and mixed-content directories are rejected.
 3. Launch **Ripple** from the desktop shortcut or Start Menu.
 4. Configure an LLM provider in AI Settings if AI features are needed.
+
+Windows current state lives in `ripple-data/` under the installation directory. On first launch, recognized legacy data for the same Windows user is migrated only when no valid current dataset exists. The database, persistent reader preferences and `ripple-migration-backup/` are verified before migrated source files are cleaned up. Failures preserve the source and stop startup; existing valid data always takes precedence without merging.
+
+Upgrades keep the registered directory, user data and migration backup. Interactive uninstall defaults to keeping data; deletion requires an explicit choice and only runs when uninstall actually starts. Silent uninstall always preserves data. Reinstalling in the same directory resumes retained state; a different directory does not automatically move data from the previous installation. Independent exports are preserved. Credentials remain tied to the same user and computer; copying the directory is not a supported cross-computer migration.
+
+Storage failures are reported rather than silently selecting another data location. Restore access to the original directory before restarting. Migration backups retain pre-migration state; no backup-restoration UI is included.
+
+If an upgrade is interrupted after the previous program is removed, rerun the installer: it restores verified protected content to the original directory before continuing. Incoming program-path collisions with independent files stop installation before overwriting them. Do not delete the sibling `.ripple-upgrade-transaction` directory while recovery is pending.
 
 ### macOS
 

@@ -1,10 +1,16 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, net: electronNet, protocol, shell } = require('electron')
-const { spawn } = require('child_process')
+const { app, BrowserWindow, Menu, dialog, ipcMain, net: electronNet, protocol, shell, session } = require('electron')
+const { spawn, spawnSync } = require('child_process')
 const fs = require('fs/promises')
+const fsSync = require('fs')
 const http = require('http')
 const nodeNet = require('net')
 const path = require('path')
 const { pathToFileURL } = require('url')
+
+const profileReadArgument = process.argv.find(argument => argument.startsWith('--ripple-read-profile='))
+if (profileReadArgument) {
+  require('./verify-session').runProfileReader(profileReadArgument.slice('--ripple-read-profile='.length))
+} else {
 
 const useBuiltFrontend = process.env.RSSREADER_USE_BUILT_FRONTEND === '1'
 const isDev = !app.isPackaged && !useBuiltFrontend
@@ -14,6 +20,33 @@ let apiBaseUrl = process.env.RSSREADER_BACKEND_URL || ''
 app.setName('Ripple')
 if (process.platform === 'win32') {
   app.setAppUserModelId('io.github.ripple.desktop')
+}
+
+const installedWindows = process.platform === 'win32' && app.isPackaged
+const installationDirectory = installedWindows ? path.dirname(process.execPath) : null
+let installationDataError = null
+let installationDataReady = true
+let preparedBackup = null
+let validatingSession = false
+if (installedWindows) {
+  installationDataReady = app.requestSingleInstanceLock()
+  if (installationDataReady) {
+    try {
+      const legacyDirectories = [app.getPath('userData'), path.join(app.getPath('appData'), 'RSSReader')]
+        .filter((directory, index, all) => all.findIndex(value => path.resolve(value) === path.resolve(directory)) === index)
+      const prepared = spawnSync(getBackendExecutablePath(), ['--prepare-installation-data', installationDirectory, ...legacyDirectories], { encoding: 'utf8', windowsHide: true })
+      if (prepared.status !== 0) throw new Error((prepared.stderr || prepared.error?.message || 'Ripple user data could not be prepared').trim())
+      const location = JSON.parse(prepared.stdout)
+      const dataDirectory = path.join(installationDirectory, 'ripple-data')
+      if (path.resolve(location.userData) !== path.resolve(dataDirectory) || path.resolve(location.sessionData) !== path.resolve(dataDirectory)) throw new Error('Ripple data preparation selected an unexpected location')
+      app.setPath('userData', dataDirectory)
+      app.setPath('sessionData', dataDirectory)
+      preparedBackup = location.backup
+    } catch (error) {
+      installationDataError = error
+      installationDataReady = false
+    }
+  }
 }
 
 const applicationMenu = Menu.buildFromTemplate([
@@ -40,7 +73,8 @@ async function readDesktopSettings() {
     const raw = await fs.readFile(settingsFilePath(), 'utf8')
     return JSON.parse(raw)
   } catch (error) {
-    return {}
+    if (error.code === 'ENOENT') return {}
+    throw new Error(`Ripple 桌面设置读取失败：${error.message}`)
   }
 }
 
@@ -80,8 +114,90 @@ async function makeUniqueFilePath(targetPath) {
     suffix += 1
   }
 }
+function storageProbePath(directory) {
+  return path.join(directory, `.ripple-storage-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+}
+
+function probeWritableDirectory(directory) {
+  fsSync.accessSync(directory, fsSync.constants.R_OK | fsSync.constants.W_OK)
+  const probe = storageProbePath(directory)
+  let descriptor
+  try {
+    descriptor = fsSync.openSync(probe, 'wx', 0o600)
+  } finally {
+    if (descriptor !== undefined) fsSync.closeSync(descriptor)
+  }
+  fsSync.unlinkSync(probe)
+}
+
+function nearestExistingDirectory(targetPath) {
+  let directory = path.resolve(targetPath)
+  while (true) {
+    try {
+      if (!fsSync.statSync(directory).isDirectory()) throw new Error(`不是目录：${directory}`)
+      return directory
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+      const parent = path.dirname(directory)
+      if (parent === directory) throw error
+      directory = parent
+    }
+  }
+}
+
+function probePersistentSessionStorage() {
+  const persistentSession = session.defaultSession
+  const storagePath = typeof persistentSession.getStoragePath === 'function'
+    ? persistentSession.getStoragePath()
+    : app.getPath('sessionData')
+  if (!storagePath) throw new Error('持久会话没有存储目录')
+
+  const localStoragePath = path.join(storagePath, 'Local Storage')
+  const levelDbPath = path.join(localStoragePath, 'leveldb')
+  let levelDbExists = false
+  try {
+    levelDbExists = fsSync.statSync(levelDbPath).isDirectory()
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
+
+  if (!levelDbExists) {
+    probeWritableDirectory(nearestExistingDirectory(levelDbPath))
+    return
+  }
+
+  probeWritableDirectory(levelDbPath)
+  for (const entry of fsSync.readdirSync(levelDbPath, { withFileTypes: true })) {
+    if (entry.name === 'LOCK' || !entry.isFile()) continue
+    const filePath = path.join(levelDbPath, entry.name)
+    fsSync.accessSync(filePath, fsSync.constants.R_OK | fsSync.constants.W_OK)
+    const descriptor = fsSync.openSync(filePath, fsSync.constants.O_WRONLY)
+    fsSync.closeSync(descriptor)
+  }
+}
 
 function registerDesktopIpcHandlers() {
+  ipcMain.on('rssreader:check-storage', event => {
+    try {
+      if (installedWindows) {
+        const directory = app.getPath('userData')
+        fsSync.accessSync(path.join(directory, 'app.db'), fsSync.constants.R_OK | fsSync.constants.W_OK)
+        const probe = path.join(directory, `.ripple-preference-${process.pid}`)
+        const descriptor = fsSync.openSync(probe, 'wx')
+        fsSync.closeSync(descriptor)
+        fsSync.unlinkSync(probe)
+      }
+      probePersistentSessionStorage()
+      event.returnValue = null
+    } catch (error) { event.returnValue = `Ripple 数据目录不可读写：${error.message}` }
+  })
+  ipcMain.on('rssreader:flush-storage', event => {
+    try {
+      session.defaultSession.flushStorageData()
+      probePersistentSessionStorage()
+      event.returnValue = null
+    } catch (error) { event.returnValue = `Ripple 偏好刷新失败：${error.message}` }
+  })
   ipcMain.handle('rssreader:open-external', async (_event, url) => {
     if (!isExternalUrl(url)) {
       return { ok: false, message: 'Unsupported external URL' }
@@ -112,11 +228,12 @@ function registerDesktopIpcHandlers() {
 
     const finalPath = await makeUniqueFilePath(result.filePath)
     await fs.writeFile(finalPath, content, 'utf8')
-    await writeDesktopSettings({
-      ...settings,
-      lastExportDirectory: path.dirname(finalPath)
-    })
-    return { canceled: false, filePath: finalPath }
+    try {
+      await writeDesktopSettings({ ...settings, lastExportDirectory: path.dirname(finalPath) })
+      return { canceled: false, filePath: finalPath }
+    } catch (error) {
+      return { canceled: false, filePath: finalPath, settingsWarning: `Markdown 已导出，但上次导出位置未保存：${error.message}` }
+    }
   })
 }
 
@@ -362,11 +479,30 @@ function stopBackend() {
 }
 
 app.whenReady().then(async () => {
+  if (!installationDataReady) {
+    if (installationDataError) dialog.showErrorBox('Ripple 数据准备失败', `${installationDataError.message}\n原有数据未作为空账号打开，请修复目录或数据后重试。`)
+    app.quit()
+    return
+  }
+  if (installedWindows && preparedBackup) {
+    validatingSession = true
+    try {
+      await require('./verify-session').verifyMigratedSession(preparedBackup)
+      const confirmed = spawnSync(getBackendExecutablePath(), ['--confirm-installation-data', installationDirectory], { encoding: 'utf8', windowsHide: true })
+      if (confirmed.status !== 0) throw new Error((confirmed.stderr || confirmed.error?.message || 'Ripple migration confirmation failed').trim())
+    } finally {
+      validatingSession = false
+    }
+  }
   if (!isDev || useBuiltFrontend) {
     registerFrontendProtocol()
   }
   registerDesktopIpcHandlers()
   await startBackend()
+  if (installedWindows) {
+    const confirmed = spawnSync(getBackendExecutablePath(), ['--confirm-installation-data', installationDirectory], { encoding: 'utf8', windowsHide: true })
+    if (confirmed.status !== 0) throw new Error((confirmed.stderr || 'Ripple database state could not be confirmed').trim())
+  }
   await createWindow()
 
   app.on('activate', async () => {
@@ -374,12 +510,17 @@ app.whenReady().then(async () => {
       await createWindow()
     }
   })
+}).catch(error => {
+  dialog.showErrorBox('Ripple 启动失败', error.message)
+  app.quit()
 })
 
 app.on('before-quit', stopBackend)
 
 app.on('window-all-closed', () => {
+  if (validatingSession) return
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
+}

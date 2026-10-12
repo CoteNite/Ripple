@@ -680,3 +680,14 @@
 - Added a retry path for embedding providers that reject `dimensions`, allowing the request to fall back to the provider's native output dimension and then rely on the existing vector length check.
 - Restored the Electron application menu with standard app/edit/view/window roles so macOS system edit shortcuts such as Cmd+C and Cmd+V work in the desktop app.
 - Changed the reader sidebar tag panel's first-run default state from expanded to collapsed while preserving any saved user preference in localStorage.
+
+## 2026-10-12（Windows 安装目录与数据生命周期实现）
+
+- 使用 `implement` 按依赖实现 #2、#4、#5、#6、#7；开发分支为 `feat/windows-installation-data`，未向教学文档分支 `main` 合并。
+- 新增安装目录数据准备、SQLite 与持久会话验证、迁移备份及受控源清理；Windows 辅助安装器支持当前用户目录选择、升级保护恢复、默认保留卸载和明确删除选择。程序所有权使用路径与 SHA-256，独立导出及无关文件不随程序清理。
+- 补齐数据库、阅读偏好、标签和笔记的失败反馈；读失败保留已有内容，笔记保存按文章身份与读取代次隔离，Chromium 实际存储子目录失去写权限时阻止偏好保存。
+- 执行 Standards 与 Spec 双轴审查并修复可操作发现，包括旧卸载器删除参数、升级目录覆盖、保护记录同名冲突、中断事务恢复、未启动卸载、待激活数据库缺失、源子目录不可读和同步 IPC 成功响应。
+- 验证：后端全套 113 项、安装数据 12 项通过；前端类型检查与生产构建通过；PyInstaller 后端及实际 NSIS 安装包构建成功。真实 Windows 安装、卸载保留/删除、同目录重装、可信上游 v0.1.7 首次升级、新布局升级及失注册后的事务恢复已运行。真实 LevelDB 子目录写权限失败可见，修复后偏好跨进程重启保留。
+- Chromium 六场景 smoke 接受有效旧偏好，拒绝损坏/不支持版本及空偏好双损坏，源与备份哈希不变；补充 ReaderView 写入状态转换与升级事务部分复制、清理重试的定向 smoke。详细证据见 `update_docs/Week42_CoteNite.md`。
+- 限制：使用本机非管理员账号下的独立合成测试目录，未运行 Hyper-V 快照；未签名或发布安装包，未验证 macOS/Linux 运行时及真实可移动磁盘硬件。本功能不提供自动更新、可移植模式、跨电脑凭据迁移或备份恢复界面。
+

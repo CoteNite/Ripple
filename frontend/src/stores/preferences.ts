@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { persistentStorage } from '../utils/persistentStorage'
 
 const FONT_SIZE_KEY = 'rssreader.readerFontSize'
 const THEME_KEY = 'rssreader.readerTheme'
@@ -52,7 +53,7 @@ export interface CustomPalette {
 }
 
 function storedFontSize() {
-  const raw = localStorage.getItem(FONT_SIZE_KEY)
+  const raw = persistentStorage.getItem(FONT_SIZE_KEY)
   if (raw === null) {
     return 16
   }
@@ -61,11 +62,11 @@ function storedFontSize() {
 }
 
 function storedTheme(): ReaderTheme {
-  return localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light'
+  return persistentStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light'
 }
 
 function storedAppearanceMode(): AppearanceMode {
-  const raw = localStorage.getItem(APPEARANCE_MODE_KEY)
+  const raw = persistentStorage.getItem(APPEARANCE_MODE_KEY)
   if (raw === 'light' || raw === 'dark') {
     return raw
   }
@@ -73,7 +74,7 @@ function storedAppearanceMode(): AppearanceMode {
 }
 
 function storedPalette(): AppearancePalette {
-  const raw = localStorage.getItem(PALETTE_KEY)
+  const raw = persistentStorage.getItem(PALETTE_KEY)
   if (
     raw === 'mono' || raw === 'blue' || raw === 'classic' || raw === 'indigo' || raw === 'slate' ||
     raw === 'fog' || raw === 'teal' || raw === 'green' || raw === 'sage' ||
@@ -104,7 +105,7 @@ function defaultCustomPalette(): CustomPalette {
 
 function storedCustomPalette(): CustomPalette {
   const fallback = defaultCustomPalette()
-  const raw = localStorage.getItem(CUSTOM_PALETTE_KEY)
+  const raw = persistentStorage.getItem(CUSTOM_PALETTE_KEY)
   if (!raw) return fallback
   try {
     const parsed = JSON.parse(raw) as Partial<CustomPalette>
@@ -128,7 +129,7 @@ function storedCustomPalette(): CustomPalette {
 }
 
 function storedAppearanceExpanded() {
-  const raw = localStorage.getItem(APPEARANCE_EXPANDED_KEY)
+  const raw = persistentStorage.getItem(APPEARANCE_EXPANDED_KEY)
   if (raw === null) {
     return true
   }
@@ -136,7 +137,7 @@ function storedAppearanceExpanded() {
 }
 
 function storedSurface(): ReaderSurface {
-  const raw = localStorage.getItem(SURFACE_KEY)
+  const raw = persistentStorage.getItem(SURFACE_KEY)
   if (raw === 'mist' || raw === 'night') {
     return raw
   }
@@ -144,7 +145,7 @@ function storedSurface(): ReaderSurface {
 }
 
 function storedBoolean(key: string, fallback: boolean) {
-  const raw = localStorage.getItem(key)
+  const raw = persistentStorage.getItem(key)
   if (raw === null) {
     return fallback
   }
@@ -152,7 +153,7 @@ function storedBoolean(key: string, fallback: boolean) {
 }
 
 function storedSyncInterval() {
-  const raw = localStorage.getItem(TIMED_SYNC_INTERVAL_KEY)
+  const raw = persistentStorage.getItem(TIMED_SYNC_INTERVAL_KEY)
   if (raw === null) {
     return 60
   }
@@ -161,7 +162,7 @@ function storedSyncInterval() {
 }
 
 function storedLineHeight() {
-  const raw = localStorage.getItem(LINE_HEIGHT_KEY)
+  const raw = persistentStorage.getItem(LINE_HEIGHT_KEY)
   if (raw === null) {
     return 1.75
   }
@@ -170,7 +171,7 @@ function storedLineHeight() {
 }
 
 function storedContentWidth() {
-  const raw = localStorage.getItem(CONTENT_WIDTH_KEY)
+  const raw = persistentStorage.getItem(CONTENT_WIDTH_KEY)
   if (raw === null) {
     return 760
   }
@@ -225,78 +226,76 @@ export const usePreferencesStore = defineStore('preferences', {
       return this.appearanceMode
     },
     setReaderFontSize(value: number) {
+      persistentStorage.setItem(FONT_SIZE_KEY, String(value))
       this.readerFontSize = value
-      localStorage.setItem(FONT_SIZE_KEY, String(value))
       this.applyPreferences()
     },
     setAppearanceMode(value: AppearanceMode) {
+      persistentStorage.setItem(APPEARANCE_MODE_KEY, value)
+      persistentStorage.setItem(THEME_KEY, value)
       this.appearanceMode = value
       this.readerTheme = value
-      localStorage.setItem(APPEARANCE_MODE_KEY, value)
-      localStorage.setItem(THEME_KEY, this.readerTheme)
       this.applyPreferences()
     },
     setAppearancePalette(value: AppearancePalette) {
+      persistentStorage.setItem(PALETTE_KEY, value)
       this.appearancePalette = value
-      localStorage.setItem(PALETTE_KEY, value)
       this.applyPreferences()
     },
     setCustomPalette(patch: Partial<CustomPalette>) {
-      this.customPalette = {
-        ...this.customPalette,
-        ...patch
-      }
-      localStorage.setItem(CUSTOM_PALETTE_KEY, JSON.stringify(this.customPalette))
+      const palette = { ...this.customPalette, ...patch }
+      persistentStorage.setItem(CUSTOM_PALETTE_KEY, JSON.stringify(palette))
+      persistentStorage.setItem(PALETTE_KEY, 'custom')
+      this.customPalette = palette
       this.appearancePalette = 'custom'
-      localStorage.setItem(PALETTE_KEY, 'custom')
       this.applyPreferences()
     },
     setAppearanceExpanded(value: boolean) {
+      persistentStorage.setItem(APPEARANCE_EXPANDED_KEY, String(value))
       this.appearanceExpanded = value
-      localStorage.setItem(APPEARANCE_EXPANDED_KEY, String(value))
     },
     setReaderTheme(value: ReaderTheme) {
+      persistentStorage.setItem(THEME_KEY, value)
       this.readerTheme = value
-      localStorage.setItem(THEME_KEY, value)
       this.applyPreferences()
     },
     setReaderSurface(value: ReaderSurface) {
+      persistentStorage.setItem(SURFACE_KEY, value)
       this.readerSurface = value
-      localStorage.setItem(SURFACE_KEY, value)
       this.applyPreferences()
     },
     setReaderLineHeight(value: number) {
       const normalized = Number.isFinite(value) && value >= 1.4 && value <= 2.2 ? Number(value.toFixed(2)) : 1.75
+      persistentStorage.setItem(LINE_HEIGHT_KEY, String(normalized))
       this.readerLineHeight = normalized
-      localStorage.setItem(LINE_HEIGHT_KEY, String(normalized))
       this.applyPreferences()
     },
     setReaderContentWidth(value: number) {
       const normalized = Number.isFinite(value) && value >= 640 && value <= 1040 ? Math.round(value) : 760
+      persistentStorage.setItem(CONTENT_WIDTH_KEY, String(normalized))
       this.readerContentWidth = normalized
-      localStorage.setItem(CONTENT_WIDTH_KEY, String(normalized))
       this.applyPreferences()
     },
     setStartupSyncEnabled(value: boolean) {
+      persistentStorage.setItem(STARTUP_SYNC_KEY, String(value))
       this.startupSyncEnabled = value
-      localStorage.setItem(STARTUP_SYNC_KEY, String(value))
     },
     setTimedSyncEnabled(value: boolean) {
+      persistentStorage.setItem(TIMED_SYNC_KEY, String(value))
       this.timedSyncEnabled = value
-      localStorage.setItem(TIMED_SYNC_KEY, String(value))
     },
     setTimedSyncIntervalMinutes(value: number) {
       const normalized = Number.isFinite(value) && value >= 5 ? Math.floor(value) : 60
+      persistentStorage.setItem(TIMED_SYNC_INTERVAL_KEY, String(normalized))
       this.timedSyncIntervalMinutes = normalized
-      localStorage.setItem(TIMED_SYNC_INTERVAL_KEY, String(normalized))
     },
     shouldRunStartupSync(cooldownMs = 10 * 60 * 1000) {
-      const raw = localStorage.getItem(LAST_STARTUP_SYNC_KEY)
+      const raw = persistentStorage.getItem(LAST_STARTUP_SYNC_KEY)
       const lastSyncAt = raw ? Number(raw) : 0
       return !Number.isFinite(lastSyncAt) || Date.now() - lastSyncAt >= cooldownMs
     },
     recordStartupSync(timestamp = Date.now()) {
-      localStorage.setItem(LAST_STARTUP_SYNC_KEY, String(timestamp))
+      persistentStorage.setItem(LAST_STARTUP_SYNC_KEY, String(timestamp))
     }
   }
 })

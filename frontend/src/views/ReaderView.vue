@@ -454,9 +454,10 @@
                 :rows="8"
                 resize="none"
                 placeholder="写下这篇文章的 Markdown 笔记"
+                :disabled="!canSaveCurrentNote"
               />
               <div class="note-actions note-popover-actions">
-                <el-button type="primary" :loading="noteSaveState === 'saving'" @click="saveNoteNow">立即保存</el-button>
+                <el-button type="primary" :disabled="!canSaveCurrentNote" :loading="noteSaveState === 'saving'" @click="saveNoteNow">立即保存</el-button>
                 <el-button class="note-export-button" @click="exportNote">
                   导出笔记
                   <el-icon class="button-icon-right"><Download /></el-icon>
@@ -802,6 +803,7 @@ import { getErrorMessage, rssApi } from '../api/client'
 import type { ArticleListQuery } from '../stores/reader'
 import { useReaderStore } from '../stores/reader'
 import { apiErrorMessage, showSyncReportMessage, statusTagType, syncSuggestion } from '../utils/syncDiagnostics'
+import { persistentStorage } from '../utils/persistentStorage'
 import FeedManageView from './FeedManageView.vue'
 
 const store = useReaderStore()
@@ -819,6 +821,9 @@ const lastSavedNote = ref('')
 const notePopoverOpen = ref(false)
 const noteSaveState = ref<'idle' | 'saving' | 'saved' | 'failed'>('idle')
 const noteLoading = ref(false)
+const noteReadFailed = ref(false)
+const noteArticleId = ref<number | null>(null)
+let noteLoadVersion = 0
 const aiResult = ref('')
 const summaryUsage = ref('')
 const summaryRunning = ref(false)
@@ -1015,7 +1020,7 @@ function clampNumber(value: number, min: number, max: number) {
 }
 
 function storedPanelWidth(key: string, fallback: number, min: number, max: number) {
-  const raw = localStorage.getItem(key)
+  const raw = persistentStorage.getItem(key)
   const value = raw ? Number(raw) : fallback
   return Number.isFinite(value) ? clampNumber(value, min, max) : fallback
 }
@@ -1162,7 +1167,10 @@ const summaryIncomplete = computed(() => {
 })
 
 const summaryClampStyle = computed(() => ({ WebkitLineClamp: String(store.summaryLineCount) }))
-const hasCurrentNote = computed(() => note.value.trim().length > 0 || lastSavedNote.value.trim().length > 0)
+const canSaveCurrentNote = computed(() => !noteLoading.value && !noteReadFailed.value
+  && noteArticleId.value !== null && noteArticleId.value === store.selectedArticle?.id)
+const hasCurrentNote = computed(() => noteArticleId.value === store.selectedArticle?.id
+  && (note.value.trim().length > 0 || lastSavedNote.value.trim().length > 0))
 const noteSaveStatusText = computed(() => {
   if (noteSaveState.value === 'saving') return '保存中...'
   if (noteSaveState.value === 'saved') return '已保存'
@@ -1216,16 +1224,24 @@ onUnmounted(() => {
 watch(
   () => store.selectedArticle?.id,
   async (newId, oldId) => {
+    const selectionVersion = ++noteLoadVersion
+    clearNoteSaveTimer()
+    let previousNoteSave: Promise<void> | undefined
     if (oldId !== undefined) {
       saveSummaryToCache(oldId)
-      try {
-        await flushNote({ articleId: oldId, content: note.value })
-      } catch {
-        if (store.hasArticle(oldId)) {
-          ElMessage.error('保存上一条文章笔记失败')
-        }
+      if (!noteLoading.value && !noteReadFailed.value && noteArticleId.value === oldId) {
+        previousNoteSave = flushNote({ articleId: oldId, content: note.value })
       }
     }
+    noteLoading.value = newId !== undefined
+    try {
+      await previousNoteSave
+    } catch {
+      if (oldId !== undefined && store.hasArticle(oldId)) {
+        ElMessage.error('保存上一条文章笔记失败')
+      }
+    }
+    if (selectionVersion !== noteLoadVersion || store.selectedArticle?.id !== newId) return
     clearSummaryResult()
     summaryDrawerOpen.value = false
     await loadNote()
@@ -1351,8 +1367,8 @@ function startPanelResize(kind: 'sidebar' | 'article-list', event: PointerEvent)
         return
       }
       const width = clampNumber(next, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+      persistentStorage.setItem(SIDEBAR_WIDTH_KEY, String(width))
       sidebarWidth.value = width
-      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width))
       store.setLeftSidebarVisible(true)
       return
     }
@@ -1362,8 +1378,8 @@ function startPanelResize(kind: 'sidebar' | 'article-list', event: PointerEvent)
       return
     }
     const width = clampNumber(next, ARTICLE_LIST_MIN_WIDTH, ARTICLE_LIST_MAX_WIDTH)
+    persistentStorage.setItem(ARTICLE_LIST_WIDTH_KEY, String(width))
     articleListWidth.value = width
-    localStorage.setItem(ARTICLE_LIST_WIDTH_KEY, String(width))
     store.setArticleListVisible(true)
   }
 
@@ -1417,26 +1433,37 @@ function handleArticleListScroll(event: Event) {
 
 async function loadNote() {
   clearNoteSaveTimer()
-  if (!store.selectedArticle) {
+  const articleId = store.selectedArticle?.id
+  const loadVersion = ++noteLoadVersion
+  if (articleId === undefined) {
     note.value = ''
     lastSavedNote.value = ''
+    noteArticleId.value = null
+    noteLoading.value = false
+    noteReadFailed.value = false
     noteSaveState.value = 'idle'
     return
   }
   noteLoading.value = true
+  noteReadFailed.value = false
   try {
-    const data = await rssApi.note(store.selectedArticle.id)
+    const data = await rssApi.note(articleId)
+    if (loadVersion !== noteLoadVersion || store.selectedArticle?.id !== articleId) return
+    if (data.article_id !== articleId) throw new Error('读取的笔记与当前文章不匹配')
     note.value = data.content_markdown
     lastSavedNote.value = data.content_markdown
+    noteArticleId.value = articleId
     noteSaveState.value = data.content_markdown.trim() ? 'saved' : 'idle'
     await nextTick()
   } catch (error) {
-    console.warn('Failed to load note', error)
-    note.value = ''
-    lastSavedNote.value = ''
-    noteSaveState.value = 'idle'
+    if (loadVersion !== noteLoadVersion || store.selectedArticle?.id !== articleId) return
+    noteReadFailed.value = true
+    ElMessage.error(getErrorMessage(error, '读取笔记失败，原内容已保留，请勿覆盖保存'))
+    noteSaveState.value = 'failed'
   } finally {
-    noteLoading.value = false
+    if (loadVersion === noteLoadVersion && store.selectedArticle?.id === articleId) {
+      noteLoading.value = false
+    }
   }
 }
 
@@ -1444,7 +1471,7 @@ async function loadSummaryProviders() {
   try {
     summaryProviders.value = await rssApi.llmProviders()
   } catch (error) {
-    console.warn('Failed to load LLM providers.', error)
+    ElMessage.error(getErrorMessage(error, '读取 AI Provider 失败，原配置未替换'))
   }
 }
 
@@ -1635,18 +1662,26 @@ async function toggleSelectedArticleTag(tagId: number) {
   } else {
     current.add(tagId)
   }
-  await updateSelectedArticleTags(Array.from(current))
+  try {
+    await updateSelectedArticleTags(Array.from(current))
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '保存文章标签失败'))
+  }
 }
 
 async function createAndAssignTagFromSearch() {
   const name = tagSearchQuery.value.trim()
   if (!name || !store.selectedArticle) return
-  const matchedTag = store.tags.find((tag) => tag.name.trim().toLowerCase() === name.toLowerCase())
-  const tag = matchedTag ?? await store.createTag({ name, color: newTagColor.value })
-  if (!selectedArticleTagIds.value.includes(tag.id)) {
-    await updateSelectedArticleTags([...selectedArticleTagIds.value, tag.id])
+  try {
+    const matchedTag = store.tags.find((tag) => tag.name.trim().toLowerCase() === name.toLowerCase())
+    const tag = matchedTag ?? await store.createTag({ name, color: newTagColor.value })
+    if (!selectedArticleTagIds.value.includes(tag.id)) {
+      await updateSelectedArticleTags([...selectedArticleTagIds.value, tag.id])
+    }
+    tagSearchQuery.value = ''
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '创建或关联文章标签失败'))
   }
-  tagSearchQuery.value = ''
 }
 
 function normalizeAiTagName(name: string) {
@@ -1734,12 +1769,16 @@ async function applyAiTagCandidates() {
 
 async function deleteTag(tagId: number) {
   const deletingActiveTag = activeTagId.value === tagId
-  await store.deleteTag(tagId)
-  if (deletingActiveTag) {
-    activeTagId.value = null
-    await reloadArticleList()
-  } else if (activeTagId.value !== null) {
-    await reloadArticleList()
+  try {
+    await store.deleteTag(tagId)
+    if (deletingActiveTag) {
+      activeTagId.value = null
+      await reloadArticleList()
+    } else if (activeTagId.value !== null) {
+      await reloadArticleList()
+    }
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '删除标签失败'))
   }
 }
 
@@ -1752,7 +1791,7 @@ function clearNoteSaveTimer() {
 
 function scheduleNoteAutoSave() {
   clearNoteSaveTimer()
-  if (!store.selectedArticle) return
+  if (!canSaveCurrentNote.value) return
   if (note.value === lastSavedNote.value) {
     noteSaveState.value = note.value.trim() ? 'saved' : 'idle'
     return
@@ -1774,7 +1813,13 @@ async function saveNoteNow() {
 async function flushNote(options: { articleId?: number; content?: string; showSuccess?: boolean } = {}) {
   clearNoteSaveTimer()
   const articleId = options.articleId ?? store.selectedArticle?.id
-  if (!articleId) return
+  if (articleId === undefined) return
+  if (noteLoading.value || noteReadFailed.value || noteArticleId.value !== articleId) {
+    const error = new Error('笔记未成功读取，请重新读取后再保存，避免覆盖原内容')
+    if (options.showSuccess) ElMessage.error(error.message)
+    throw error
+  }
+  const loadVersion = noteLoadVersion
   const content = options.content ?? note.value
   if (content === lastSavedNote.value) {
     noteSaveState.value = content.trim() ? 'saved' : 'idle'
@@ -1784,18 +1829,21 @@ async function flushNote(options: { articleId?: number; content?: string; showSu
   noteSaveState.value = 'saving'
   try {
     await rssApi.saveNote(articleId, content)
-    if (store.selectedArticle?.id === articleId && note.value === content) {
+    if (loadVersion === noteLoadVersion && noteArticleId.value === articleId
+      && store.selectedArticle?.id === articleId && note.value === content) {
       lastSavedNote.value = content
       noteSaveState.value = content.trim() ? 'saved' : 'idle'
     }
-    if (options.showSuccess) ElMessage.success('笔记已保存')
+    if (options.showSuccess && loadVersion === noteLoadVersion
+      && noteArticleId.value === articleId && store.selectedArticle?.id === articleId) {
+      ElMessage.success('笔记已保存')
+    }
   } catch (error) {
-    if (store.selectedArticle?.id === articleId && note.value === content) {
+    if (loadVersion === noteLoadVersion && noteArticleId.value === articleId
+      && store.selectedArticle?.id === articleId && note.value === content) {
       noteSaveState.value = 'failed'
     }
-    if (options.showSuccess) {
-      ElMessage.error(getErrorMessage(error, '保存笔记失败'))
-    }
+    ElMessage.error(getErrorMessage(error, '保存笔记失败，原内容未替换'))
     throw error
   }
 }
@@ -1985,6 +2033,7 @@ async function saveMarkdownContent(markdown: string, filename: string) {
     })
     if (!result.canceled) {
       ElMessage.success('Markdown 已导出')
+      if (result.settingsWarning) ElMessage.warning(result.settingsWarning)
     }
     return
   }
@@ -2032,9 +2081,13 @@ function handleFeedSectionCommand(command: string) {
 async function unsubscribeCurrentFeed() {
   const feed = activeFeedForMenu.value
   if (!feed) return
-  await rssApi.deleteFeed(feed.id)
-  activeFeedId.value = null
-  await reloadArticleList()
+  try {
+    await rssApi.deleteFeed(feed.id)
+    activeFeedId.value = null
+    await reloadArticleList()
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '退订失败，原订阅未更改'))
+  }
 }
 
 function decreaseSummaryLines() {

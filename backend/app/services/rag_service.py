@@ -51,16 +51,13 @@ def get_config() -> dict:
         "rag_deepseek_base_url": DEEPSEEK_BASE_URL,
         "rag_deepseek_model": DEEPSEEK_MODEL,
     }
-    try:
-        with get_connection() as conn:
-            rows = conn.execute(
-                "SELECT key, value FROM app_config WHERE key LIKE 'rag_%'"
-            ).fetchall()
-        for row in rows:
-            if row["value"]:
-                defaults[row["key"]] = row["value"]
-    except Exception:
-        pass
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM app_config WHERE key LIKE 'rag_%'"
+        ).fetchall()
+    for row in rows:
+        if row["value"]:
+            defaults[row["key"]] = row["value"]
     defaults["rag_siliconflow_api_key"] = decrypt_secret(defaults.get("rag_siliconflow_api_key", ""))
     defaults["rag_deepseek_api_key"] = decrypt_secret(defaults.get("rag_deepseek_api_key", ""))
     return defaults

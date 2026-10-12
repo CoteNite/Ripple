@@ -18,6 +18,8 @@
   "build": {
     "appId": "io.github.ripple.desktop",
     "productName": "Ripple",
+    "afterPack": "scripts/after-pack.js",
+    "afterSign": "scripts/after-pack.js",
     "directories": {
       "output": "release"
     },
@@ -39,8 +41,13 @@
       "target": "nsis"
     },
     "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": false,
       "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico"
+      "uninstallerIcon": "build/icon.ico",
+      "include": "build/installer.nsh"
     },
     "mac": {
       "target": "dmg",
