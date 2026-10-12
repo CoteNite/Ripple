@@ -37,6 +37,7 @@ Incoming program paths are checked against current/legacy ownership hashes befor
 - Actual Chromium six-case smoke accepted a valid legacy profile and rejected corrupt manifests, unsupported schema versions and corrupt empty-profile maps; rejected cases retained source and backup byte hashes. Actual installed LevelDB-only write denial returned a desktop storage error; after ACL repair, a saved font value survived process restart.
 - Actual installer retry recovered protected data after the old registration and original data files were removed; database SHA-256 matched the pre-upgrade value. An independent incoming `resources/app.asar` collision was rejected before extraction.
 - Actual-source consumer smokes covered cached persisted article tag writes, note read/save identity races, failed unsubscribe/provider reads, independent AI settings reads, prior-value preservation and initial-read RAG save gating.
+- Final installed AI settings surface showed all three synthetic HTTP 503 read errors, disabled unread RAG saves, and cleared the alert/re-enabled saving after retry succeeded. Final unregistered same-directory silent `/D` reinstall and preservation uninstall both completed successfully.
 
 ## Limits
 
