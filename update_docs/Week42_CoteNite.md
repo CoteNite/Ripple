@@ -10,6 +10,8 @@ The supplemental data-preparation interface is `prepare_installation_data` / `co
 
 Before confirming a migrated Chromium session, isolated clones are opened in separate Electron processes. A committed random Local Storage probe must survive a process boundary, and the LevelDB `LOCK` file identity must remain unchanged; corrupt/unsupported stores that Chromium would recreate or replace with memory-only storage are rejected. Source and migration backup are never opened for repair by this verifier.
 
+WAL integrity is checked before Chromium opens either profile or a validation clone. Numeric Local Storage `.log` files are scanned in bounded 32 KiB blocks for masked CRC32C, complete physical records, legal padding/trailers, fragment continuity and WriteBatch shape/count. Matching profiles and a durable probe are not evidence that recovery preserved every record. Corruption or an incomplete crash-tail commit stops migration without modifying source, backup or target; no recovery records are silently discarded.
+
 No business schema migration or new business HTTP endpoint was added. SQLite runtime errors now return HTTP 503 with a readable data-directory error. Reader fetch failures retain existing content, tag writes no longer report local-only success, failed note reads block saving, and preference changes are applied to in-memory state after persistence succeeds.
 
 AI configuration reads are independent and retain their last successful values on failure. A visible retry alert and initial-read save gates prevent unread RAG defaults from overwriting valid configuration. Reader provider-load, tag-operation and unsubscribe failures are surfaced without clearing valid selection or content.
@@ -38,6 +40,8 @@ Incoming program paths are checked against current/legacy ownership hashes befor
 - Actual installer retry recovered protected data after the old registration and original data files were removed; database SHA-256 matched the pre-upgrade value. An independent incoming `resources/app.asar` collision was rejected before extraction.
 - Actual-source consumer smokes covered cached persisted article tag writes, note read/save identity races, failed unsubscribe/provider reads, independent AI settings reads, prior-value preservation and initial-read RAG save gating.
 - Final installed AI settings surface showed all three synthetic HTTP 503 read errors, disabled unread RAG saves, and cleared the alert/re-enabled saving after retry succeeded. Final unregistered same-directory silent `/D` reinstall and preservation uninstall both completed successfully.
+- WAL regression: `node --test electron/tests/leveldb-wal.test.js electron/tests/session-migration.test.js` — 29 tests passed, including lossless historical empty-FIRST block-boundary compatibility. The real Electron 33.4.11 + SQLite migration regression failed before the fix because matching CRC-damaged WALs were accepted and source cleanup ran. After the fix, matching damage and target-only damage are rejected with filename/offset/checksum errors, all three directories retain their byte hashes and activation stays `awaiting-session`. A valid 70,000-character preference spanning WAL blocks still migrates.
+- Rebuilt Windows NSIS artifact with the guard and exercised the shipped Electron profile-reader: valid preferences read back, corrupted `000003.log` exited with a checksum/offset error before ready, and its bytes stayed unchanged.
 
 ## Limits
 

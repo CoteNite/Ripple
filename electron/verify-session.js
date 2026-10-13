@@ -5,6 +5,7 @@ const path = require('path')
 const os = require('os')
 const { randomUUID } = require('crypto')
 const fsSync = require('fs')
+const { validateProfileWals } = require('./leveldb-wal')
 
 function captureDatabaseEvidence(directory) {
   const database = path.join(directory, 'Local Storage', 'leveldb')
@@ -42,6 +43,7 @@ async function verifyDatabaseEvidence(evidence) {
 }
 
 async function guardDatabase(directory) {
+  validateProfileWals(directory)
   const database = path.join(directory, 'Local Storage', 'leveldb')
   await fs.mkdir(database, { recursive: true })
   const files = await fs.readdir(database)
@@ -110,9 +112,17 @@ async function readPreferences(profile, directory, probe, evidence) {
 }
 
 exports.runProfileReader = function runProfileReader(directory) {
-  app.setPath('userData', directory)
-  app.setPath('sessionData', directory)
-  const evidence = captureDatabaseEvidence(directory)
+  let evidence
+  try {
+    validateProfileWals(directory)
+    app.setPath('userData', directory)
+    app.setPath('sessionData', directory)
+    evidence = captureDatabaseEvidence(directory)
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`)
+    app.exit(1)
+    return
+  }
   protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true } }])
   app.on('window-all-closed', () => {})
   app.whenReady().then(async () => {
@@ -137,11 +147,14 @@ async function readProfileInChild(directory, probe) {
 }
 
 exports.verifyMigratedSession = async function verifyMigratedSession(backup) {
+  const directory = app.getPath('sessionData')
+  validateProfileWals(backup)
+  validateProfileWals(directory)
   const checkDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'ripple-session-validation-'))
   const targetCheckDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'ripple-session-target-validation-'))
   try {
     await fs.cp(backup, checkDirectory, { recursive: true, errorOnExist: true, force: false })
-    const directory = app.getPath('sessionData')
+    // Revalidate copied bytes in the child before its ready event as well.
     await fs.cp(directory, targetCheckDirectory, { recursive: true, errorOnExist: true, force: false })
     const probe = { key: `__ripple_migration_verify_${randomUUID()}`, value: randomUUID() }
     const expected = await readProfileInChild(checkDirectory, probe)
