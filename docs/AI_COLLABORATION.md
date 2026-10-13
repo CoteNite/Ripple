@@ -680,3 +680,31 @@
 - Added a retry path for embedding providers that reject `dimensions`, allowing the request to fall back to the provider's native output dimension and then rely on the existing vector length check.
 - Restored the Electron application menu with standard app/edit/view/window roles so macOS system edit shortcuts such as Cmd+C and Cmd+V work in the desktop app.
 - Changed the reader sidebar tag panel's first-run default state from expanded to collapsed while preserving any saved user preference in localStorage.
+
+## 2026-10-12（Windows 安装目录与数据生命周期实现）
+
+- 使用 `implement` 按依赖实现 #2、#4、#5、#6、#7；开发分支为 `feat/windows-installation-data`，未向教学文档分支 `main` 合并。
+- 新增安装目录数据准备、SQLite 与持久会话验证、迁移备份及受控源清理；Windows 辅助安装器支持当前用户目录选择、升级保护恢复、默认保留卸载和明确删除选择。程序所有权使用路径与 SHA-256，独立导出及无关文件不随程序清理。
+- 补齐数据库、阅读偏好、标签和笔记的失败反馈；读失败保留已有内容，笔记保存按文章身份与读取代次隔离，Chromium 实际存储子目录失去写权限时阻止偏好保存。
+- 执行 Standards 与 Spec 双轴审查并修复可操作发现，包括旧卸载器删除参数、升级目录覆盖、保护记录同名冲突、中断事务恢复、未启动卸载、待激活数据库缺失、源子目录不可读和同步 IPC 成功响应。
+- 验证：后端全套 113 项、安装数据 12 项通过；前端类型检查与生产构建通过；PyInstaller 后端及实际 NSIS 安装包构建成功。真实 Windows 安装、卸载保留/删除、同目录重装、可信上游 v0.1.7 首次升级、新布局升级及失注册后的事务恢复已运行。真实 LevelDB 子目录写权限失败可见，修复后偏好跨进程重启保留。
+- Chromium 六场景 smoke 接受有效旧偏好，拒绝损坏/不支持版本及空偏好双损坏，源与备份哈希不变；补充 ReaderView 写入状态转换与升级事务部分复制、清理重试的定向 smoke。详细证据见 `update_docs/Week42_CoteNite.md`。
+- 最终安装后的 AI 设置页在三项读取返回 503 时显示错误并禁用未读 RAG 保存；点击重试成功后错误消失、保存恢复。最终无旧注册的同目录静默 `/D` 重装及保留卸载均成功。
+- 限制：使用本机非管理员账号下的独立合成测试目录，未运行 Hyper-V 快照；未签名或发布安装包，未验证 macOS/Linux 运行时及真实可移动磁盘硬件。本功能不提供自动更新、可移植模式、跨电脑凭据迁移或备份恢复界面。
+
+## 2026-10-13（迁移前 WAL 损坏防护补齐）
+
+- 用户指出 LevelDB 默认非 paranoid 恢复会跳过 CRC 损坏记录，LOCK 不变及新 probe 持久化仍可能接受两份丢失偏好的 profile；此前六场景验证没有覆盖 WAL CRC 损坏，完成结论在此补正。
+- 增加真实 Electron 33.4.11 写出的 `000*.log` 与真实 SQLite 数据迁移回归。修复前有效控制组通过，而匹配损坏 WAL 仍返回 `accepted: true` 并进入源清理，确认缺陷。
+- 在任何 Chromium profile 打开和验证副本建立前，以固定 32 KiB 缓冲扫描 WAL，检查 masked CRC32C、记录长度/类型、分片完整性、零填充/块尾及 WriteBatch 格式和计数。损坏或不完整尾部停止迁移，不通过恢复静默丢弃记录；错误包含文件与偏移，不输出用户内容。
+- 验证：WAL 格式边界及真实 Electron 迁移共 29 项通过，包含不丢弃数据的历史 empty-FIRST 块边界兼容；匹配损坏与仅目标损坏均拒绝，源、备份、目标字节哈希不变，状态保持 `awaiting-session`；有效跨块 70,000 字符偏好可迁移。后端全套 113 项、前端类型检查与生产构建通过。
+- 重新构建 Windows NSIS 产物，并运行打包 Electron profile-reader：有效偏好读回，损坏 `000003.log` 在 ready 前以 checksum/offset 错误退出，WAL 字节未改变。
+- 限制：迁移严格拒绝 LevelDB 常规恢复可忽略的不完整崩溃尾提交；本次新增的是 Local Storage WAL 防护，不是完整 SST/manifest 离线结构检查或数据修复工具。
+
+## 2026-10-13（GitHub 合并与 Windows Release 发布流程）
+
+- 用户授权合并、推送并在 GitHub 构建 Release；以独立 worktree 准备发布，保留原工作区未提交的技能配置与领域文档。
+- 仓库原先没有远程 `develop`、Release 标签或 Actions 工作流；建立 `develop` 集成分支，并准备 `0.1.8`/`v0.1.8` 发布元数据，不把开发代码合并到教学文档分支 `main`。
+- 新增 Windows GitHub Actions 发布工作流：PR/develop 验证测试及打包，版本匹配的标签构建发布安装器、blockmap 与 SHA-256 校验文件；发布使用工作流 `GITHUB_TOKEN`，不新增外部凭据或签名密钥。
+- 实际 GitHub 构建与发布结果在完成后补充；本流程仅发布 Windows x64，安装包未签名。
+

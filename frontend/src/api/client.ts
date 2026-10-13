@@ -20,6 +20,7 @@ export function getErrorMessage(e: unknown, fallback = '请求异常，请检查
       return detail
     }
     if (status === 404 || status === 500 || !e.response) {
+      if (status === 500) return '后端数据处理失败，请检查 Ripple 数据目录权限与磁盘状态'
       return '连接失败：无法访问后端服务，请检查 API URL 链接是否正确'
     }
   }

@@ -18,6 +18,11 @@
       </div>
     </header>
 
+    <el-alert v-if="settingsLoadErrors.length" type="error" :closable="false" title="读取 AI 配置失败，已保留上次成功读取的内容">
+      <p v-for="message in settingsLoadErrors" :key="message">{{ message }}</p>
+      <el-button :loading="loadingSettings" @click="loadSettings">重新读取配置</el-button>
+    </el-alert>
+
     <section class="overview-grid">
       <div class="overview-item">
         <div class="overview-icon">
@@ -114,7 +119,7 @@
             </div>
             <div class="button-row">
               <el-button @click="resetProviderForm">新建</el-button>
-              <el-button type="primary" :loading="savingProvider" @click="saveProvider">{{ editingProviderId ? '保存修改' : '新增 Provider' }}</el-button>
+              <el-button type="primary" :disabled="!providersLoaded" :loading="savingProvider" @click="saveProvider">{{ editingProviderId ? '保存修改' : '新增 Provider' }}</el-button>
             </div>
           </div>
         </el-form>
@@ -154,7 +159,7 @@
               <el-button size="small" text type="danger" @click="removeProvider(row.id)">删除</el-button>
             </div>
           </article>
-          <el-empty v-if="!providers.length" description="暂无通用 Provider" :image-size="72" />
+          <el-empty v-if="providersLoaded && !providers.length" description="暂无通用 Provider" :image-size="72" />
         </div>
       </aside>
     </section>
@@ -216,7 +221,7 @@
             </div>
             <div class="button-row">
               <el-button @click="resetTranslationProviderForm">新建</el-button>
-              <el-button type="primary" :loading="savingTranslationProvider" @click="saveTranslationProvider">{{ editingTranslationProviderId ? '保存修改' : '新增翻译 Provider' }}</el-button>
+              <el-button type="primary" :disabled="!translationProvidersLoaded" :loading="savingTranslationProvider" @click="saveTranslationProvider">{{ editingTranslationProviderId ? '保存修改' : '新增翻译 Provider' }}</el-button>
             </div>
           </div>
         </el-form>
@@ -256,7 +261,7 @@
               <el-button size="small" text type="danger" @click="removeTranslationProvider(row.id)">删除</el-button>
             </div>
           </article>
-          <el-empty v-if="!translationProviders.length" description="暂无翻译 Provider" :image-size="72" />
+          <el-empty v-if="translationProvidersLoaded && !translationProviders.length" description="暂无翻译 Provider" :image-size="72" />
         </div>
       </aside>
     </section>
@@ -301,7 +306,7 @@
             <el-icon><Lock /></el-icon>
             <span>{{ rag.chat_provider_model || defaultProvider?.model || '请先新增并启用默认 Provider' }}</span>
           </div>
-          <el-button type="primary" :loading="saving" @click="saveRag">保存 RAG 配置</el-button>
+          <el-button type="primary" :disabled="!ragLoaded" :loading="saving" @click="saveRag">保存 RAG 配置</el-button>
         </div>
       </el-form>
     </section>
@@ -327,6 +332,11 @@ const translationTemplate = ref('vLLM Qwen3-8B')
 
 const providers = ref<LLMProvider[]>([])
 const translationProviders = ref<TranslationProvider[]>([])
+const providersLoaded = ref(false)
+const translationProvidersLoaded = ref(false)
+const ragLoaded = ref(false)
+const settingsLoadErrors = ref<string[]>([])
+const loadingSettings = ref(false)
 const selectedProviderId = ref<number | null>(null)
 const editingProviderId = ref<number | null>(null)
 const editingProviderHasApiKey = ref(false)
@@ -372,19 +382,36 @@ const rag = reactive<RagConfig>({
 
 const saving = ref(false)
 
-onMounted(async () => {
+onMounted(loadSettings)
+
+async function loadSettings() {
+  loadingSettings.value = true
+  const failures: string[] = []
   try {
     await loadProviders()
+  } catch (error) {
+    failures.push(`读取通用 Provider 失败：${getErrorMessage(error)}`)
+  }
+  try {
     await loadTranslationProviders()
+  } catch (error) {
+    failures.push(`读取翻译 Provider 失败：${getErrorMessage(error)}`)
+  }
+  try {
     const cfg = await rssApi.getRagConfig()
     Object.assign(rag, cfg)
-  } catch (e: unknown) {
-    ElMessage.warning(getErrorMessage(e))
+    ragLoaded.value = true
+  } catch (error) {
+    failures.push(`读取 RAG 配置失败：${getErrorMessage(error)}`)
   }
-})
+  settingsLoadErrors.value = failures
+  loadingSettings.value = false
+  failures.forEach((message) => ElMessage.error(message))
+}
 
 async function loadProviders() {
   providers.value = await rssApi.llmProviders()
+  providersLoaded.value = true
   const current = defaultProvider.value
   selectedProviderId.value = current?.id ?? null
   rag.chat_provider_name = current?.name || rag.chat_provider_name
@@ -393,6 +420,7 @@ async function loadProviders() {
 
 async function loadTranslationProviders() {
   translationProviders.value = await rssApi.translationProviders()
+  translationProvidersLoaded.value = true
 }
 
 function providerOptionLabel(item: LLMProvider) {
@@ -501,6 +529,10 @@ async function removeProvider(id: number) {
 }
 
 async function saveProvider() {
+  if (!providersLoaded.value) {
+    ElMessage.error('请先成功读取通用 Provider 配置，再保存')
+    return
+  }
   savingProvider.value = true
   try {
     const payload = {
@@ -611,6 +643,10 @@ async function removeTranslationProvider(id: number) {
 }
 
 async function saveTranslationProvider() {
+  if (!translationProvidersLoaded.value) {
+    ElMessage.error('请先成功读取翻译 Provider 配置，再保存')
+    return
+  }
   savingTranslationProvider.value = true
   try {
     const payload = {
@@ -640,6 +676,10 @@ async function saveTranslationProvider() {
 }
 
 async function saveRag() {
+  if (!ragLoaded.value) {
+    ElMessage.error('请先成功读取 RAG 配置，再保存，避免覆盖原内容')
+    return
+  }
   saving.value = true
   try {
     await rssApi.saveRagConfig({ ...rag })

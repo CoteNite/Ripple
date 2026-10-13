@@ -62,7 +62,8 @@
 import { Search } from '@element-plus/icons-vue'
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { rssApi, type SearchResult } from '../api/client'
+import { getErrorMessage, rssApi, type SearchResult } from '../api/client'
+import { ElMessage } from 'element-plus'
 
 defineOptions({ name: 'SearchView' })
 
@@ -80,9 +81,8 @@ async function doSearch() {
   try {
     results.value = await rssApi.search(q)
     searched.value = true
-  } catch {
-    results.value = []
-    searched.value = true
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '读取搜索结果失败，原结果已保留'))
   } finally {
     loading.value = false
   }

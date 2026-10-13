@@ -1,3 +1,5 @@
+import sqlite3
+from fastapi.responses import JSONResponse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,6 +19,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(sqlite3.Error)
+async def database_error_handler(_request, error):
+    return JSONResponse(status_code=503, content={"detail": f"Ripple 数据读写失败，请检查数据目录权限与磁盘状态：{error}"})
+
 
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(rag.router, prefix="/api/rag", tags=["rag"])

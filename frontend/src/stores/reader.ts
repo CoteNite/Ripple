@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
+import { ElMessage } from 'element-plus'
 import { Article, ArticleCounts, ArticleListItem, Feed, rssApi, Tag } from '../api/client'
+import { persistentStorage } from '../utils/persistentStorage'
 
 const PINNED_ARTICLES_KEY = 'rssreader.pinnedArticleIds'
 const SUMMARY_LINES_KEY = 'rssreader.summaryLineCount'
@@ -24,7 +26,7 @@ export interface ArticleListQuery {
 }
 
 function storedJsonArray(key: string): number[] {
-  const raw = localStorage.getItem(key)
+  const raw = persistentStorage.getItem(key)
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw)
@@ -35,19 +37,19 @@ function storedJsonArray(key: string): number[] {
 }
 
 function storedBoolean(key: string, fallback: boolean) {
-  const raw = localStorage.getItem(key)
+  const raw = persistentStorage.getItem(key)
   if (raw === null) return fallback
   return raw === 'true'
 }
 
 function storedSummaryLines() {
-  const raw = localStorage.getItem(SUMMARY_LINES_KEY)
+  const raw = persistentStorage.getItem(SUMMARY_LINES_KEY)
   const value = raw ? Number(raw) : 3
   return Number.isFinite(value) && value >= 1 && value <= 5 ? Math.round(value) : 3
 }
 
 function storedSortOrder(): SortOrder {
-  return localStorage.getItem(ARTICLE_SORT_ORDER_KEY) === 'oldest' ? 'oldest' : 'newest'
+  return persistentStorage.getItem(ARTICLE_SORT_ORDER_KEY) === 'oldest' ? 'oldest' : 'newest'
 }
 
 function emptyCounts(): ArticleCounts {
@@ -144,8 +146,6 @@ export const useReaderStore = defineStore('reader', {
       this.loadRequestId = requestId
       this.countsRequestId = countsRequestId
       this.loading = true
-      this.articleItems = []
-      this.pagination = { limit: ARTICLE_PAGE_SIZE, offset: 0, total: 0, hasMore: false }
       try {
         const normalizedQuery = this.withSort(query)
         const [feeds, articles, tags, counts] = await Promise.allSettled([
@@ -160,21 +160,19 @@ export const useReaderStore = defineStore('reader', {
         if (feeds.status === 'fulfilled') {
           this.feeds = feeds.value
         } else {
-          console.error('Failed to load feeds', feeds.reason)
+          ElMessage.error('读取订阅失败，原内容已保留')
         }
 
         if (tags.status === 'fulfilled') {
           this.tags = tags.value
         } else {
-          console.error('Failed to load tags', tags.reason)
-          this.tags = []
+          ElMessage.error('读取标签失败，原内容已保留')
         }
 
         if (counts.status === 'fulfilled' && countsRequestId === this.countsRequestId) {
           this.applyArticleCounts(counts.value)
         } else if (counts.status === 'rejected') {
-          console.error('Failed to load article counts', counts.reason)
-          this.articleCounts = emptyCounts()
+          ElMessage.error('读取文章统计失败，原内容已保留')
         }
 
         if (articles.status === 'fulfilled') {
@@ -187,10 +185,7 @@ export const useReaderStore = defineStore('reader', {
           }
           this.articleMutationVersion += 1
         } else {
-          console.error('Failed to load articles', articles.reason)
-          this.articleItems = []
-          this.pagination = { limit: ARTICLE_PAGE_SIZE, offset: 0, total: 0, hasMore: false }
-          this.articleMutationVersion += 1
+          ElMessage.error('读取文章失败，原内容已保留，请检查 Ripple 数据目录')
         }
 
         await this.ensureSelectedArticle()
@@ -417,9 +412,6 @@ export const useReaderStore = defineStore('reader', {
       this.updateTagCountsForArticle(oldTagIds, normalizedTagIds)
       this.articleMutationVersion += 1
     },
-    nextLocalTagId() {
-      return Math.min(0, ...this.tags.map((tag) => tag.id)) - 1
-    },
     upsertTag(tag: Tag) {
       const index = this.tags.findIndex((item) => item.id === tag.id)
       if (index >= 0) {
@@ -435,16 +427,9 @@ export const useReaderStore = defineStore('reader', {
       if (!name) throw new Error('Tag name is required')
       const existing = this.tags.find((tag) => tag.name.trim().toLowerCase() === name.toLowerCase())
       if (existing) return existing
-      try {
-        const created = await rssApi.createTag({ name, color: payload.color })
-        this.upsertTag(created)
-        return created
-      } catch (error) {
-        console.warn('Failed to create tag on backend, using local tag while import is busy', error)
-        const localTag = { id: this.nextLocalTagId(), name, color: payload.color }
-        this.upsertTag(localTag)
-        return localTag
-      }
+      const created = await rssApi.createTag({ name, color: payload.color })
+      this.upsertTag(created)
+      return created
     },
     removeTagFromLocalState(tagId: number) {
       this.tags = this.tags.filter((tag) => tag.id !== tagId)
@@ -478,13 +463,9 @@ export const useReaderStore = defineStore('reader', {
       this.articleMutationVersion += 1
     },
     async deleteTag(tagId: number) {
+      if (tagId < 0) throw new Error('此标签尚未保存，无法删除持久数据')
+      await rssApi.deleteTag(tagId)
       this.removeTagFromLocalState(tagId)
-      if (tagId < 0) return
-      try {
-        await rssApi.deleteTag(tagId)
-      } catch (error) {
-        console.warn('Failed to delete tag on backend while import is busy', error)
-      }
     },
     adjustUnreadCount(delta: number) {
       this.articleCounts = { ...this.articleCounts, unread: Math.max(0, this.articleCounts.unread + delta) }
@@ -605,19 +586,12 @@ export const useReaderStore = defineStore('reader', {
     },
     async setArticleTags(articleId: number, tagIds: number[]) {
       const normalizedTagIds = normalizeTagIds(tagIds)
-      const hasLocalTag = normalizedTagIds.some((tagId) => tagId < 0)
-      if (this.isCachedArticle(articleId) || hasLocalTag) {
-        this.applyArticleTagIds(articleId, normalizedTagIds)
-        return
+      if (normalizedTagIds.some(tagId => tagId < 0)) {
+        throw new Error('请等待标签持久化完成，再保存标签关联')
       }
-      try {
-        await rssApi.setArticleTags(articleId, normalizedTagIds)
-        this.applyArticleTagIds(articleId, normalizedTagIds)
-        await this.loadCounts()
-      } catch (error) {
-        console.warn('Failed to save article tags on backend, applying local tags while import is busy', error)
-        this.applyArticleTagIds(articleId, normalizedTagIds)
-      }
+      await rssApi.setArticleTags(articleId, normalizedTagIds)
+      this.applyArticleTagIds(articleId, normalizedTagIds)
+      await this.loadCounts()
     },
     togglePinned(articleId: number) {
       const set = new Set(this.pinnedArticleIds)
@@ -626,8 +600,9 @@ export const useReaderStore = defineStore('reader', {
       } else {
         set.add(articleId)
       }
-      this.pinnedArticleIds = Array.from(set)
-      localStorage.setItem(PINNED_ARTICLES_KEY, JSON.stringify(this.pinnedArticleIds))
+      const pinned = Array.from(set)
+      persistentStorage.setItem(PINNED_ARTICLES_KEY, JSON.stringify(pinned))
+      this.pinnedArticleIds = pinned
       this.articleItems = sortArticles(this.articleItems, this.pinnedArticleIds, this.articleSortOrder)
     },
     isPinned(articleId: number) {
@@ -642,36 +617,36 @@ export const useReaderStore = defineStore('reader', {
     },
     setSummaryLineCount(value: number) {
       const normalized = Number.isFinite(value) && value >= 1 && value <= 5 ? Math.round(value) : 2
+      persistentStorage.setItem(SUMMARY_LINES_KEY, String(normalized))
       this.summaryLineCount = normalized
-      localStorage.setItem(SUMMARY_LINES_KEY, String(normalized))
     },
     setShowThumbnails(value: boolean) {
+      persistentStorage.setItem(SHOW_THUMBNAILS_KEY, String(value))
       this.showThumbnails = value
-      localStorage.setItem(SHOW_THUMBNAILS_KEY, String(value))
     },
     setLeftSidebarVisible(value: boolean) {
+      persistentStorage.setItem(LEFT_SIDEBAR_VISIBLE_KEY, String(value))
       this.leftSidebarVisible = value
-      localStorage.setItem(LEFT_SIDEBAR_VISIBLE_KEY, String(value))
     },
     setArticleListVisible(value: boolean) {
+      persistentStorage.setItem(ARTICLE_LIST_VISIBLE_KEY, String(value))
       this.articleListVisible = value
-      localStorage.setItem(ARTICLE_LIST_VISIBLE_KEY, String(value))
     },
     setFilterPanelExpanded(value: boolean) {
+      persistentStorage.setItem(FILTER_PANEL_EXPANDED_KEY, String(value))
       this.filterPanelExpanded = value
-      localStorage.setItem(FILTER_PANEL_EXPANDED_KEY, String(value))
     },
     setFeedPanelExpanded(value: boolean) {
+      persistentStorage.setItem(FEED_PANEL_EXPANDED_KEY, String(value))
       this.feedPanelExpanded = value
-      localStorage.setItem(FEED_PANEL_EXPANDED_KEY, String(value))
     },
     setTagPanelExpanded(value: boolean) {
+      persistentStorage.setItem(TAG_PANEL_EXPANDED_KEY, String(value))
       this.tagPanelExpanded = value
-      localStorage.setItem(TAG_PANEL_EXPANDED_KEY, String(value))
     },
     setArticleSortOrder(value: SortOrder) {
+      persistentStorage.setItem(ARTICLE_SORT_ORDER_KEY, value)
       this.articleSortOrder = value
-      localStorage.setItem(ARTICLE_SORT_ORDER_KEY, value)
       this.articleItems = sortArticles(this.articleItems, this.pinnedArticleIds, this.articleSortOrder)
     },
     replaceArticle(article: Article) {
