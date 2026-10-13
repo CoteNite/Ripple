@@ -46,3 +46,8 @@ Incoming program paths are checked against current/legacy ownership hashes befor
 ## Limits
 
 The validation was performed with dedicated synthetic data and disposable paths on the current non-admin Windows account after checking for existing Ripple registrations/profiles; Hyper-V management was not available to this account. No signed public distribution, macOS/Linux runtime smoke or removable-drive hardware scenario was exercised. Automated backend tests do not replace the actual installer observations above. The feature does not add portable mode, cross-computer credentials, automatic updates or a backup-restoration UI.
+
+## GitHub Windows releases
+
+Release preparation updates the root `package.json` and `package-lock.json` versions together, merges through a PR into `develop`, then pushes a matching `v<version>` tag. `.github/workflows/release.yml` runs the backend suite, real Electron WAL/session regressions and frontend typecheck/build on Windows, packages the PyInstaller backend and NSIS installer, and publishes the tag's installer, blockmap and SHA-256 checksums to GitHub Releases. PR and `develop` builds verify packaging without publishing. This release workflow does not merge development code into `main`; releases are unsigned Windows x64 builds.
+

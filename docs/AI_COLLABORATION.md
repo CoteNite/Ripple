@@ -701,3 +701,10 @@
 - 重新构建 Windows NSIS 产物，并运行打包 Electron profile-reader：有效偏好读回，损坏 `000003.log` 在 ready 前以 checksum/offset 错误退出，WAL 字节未改变。
 - 限制：迁移严格拒绝 LevelDB 常规恢复可忽略的不完整崩溃尾提交；本次新增的是 Local Storage WAL 防护，不是完整 SST/manifest 离线结构检查或数据修复工具。
 
+## 2026-10-13（GitHub 合并与 Windows Release 发布流程）
+
+- 用户授权合并、推送并在 GitHub 构建 Release；以独立 worktree 准备发布，保留原工作区未提交的技能配置与领域文档。
+- 仓库原先没有远程 `develop`、Release 标签或 Actions 工作流；建立 `develop` 集成分支，并准备 `0.1.8`/`v0.1.8` 发布元数据，不把开发代码合并到教学文档分支 `main`。
+- 新增 Windows GitHub Actions 发布工作流：PR/develop 验证测试及打包，版本匹配的标签构建发布安装器、blockmap 与 SHA-256 校验文件；发布使用工作流 `GITHUB_TOKEN`，不新增外部凭据或签名密钥。
+- 实际 GitHub 构建与发布结果在完成后补充；本流程仅发布 Windows x64，安装包未签名。
+
