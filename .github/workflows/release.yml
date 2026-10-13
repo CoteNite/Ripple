@@ -75,12 +75,16 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder --win nsis --x64 --publish never
 
-      - name: Generate release checksums
+      - name: Normalize release filenames and generate checksums
         shell: pwsh
         run: |
           $version = '${{ steps.package.outputs.version }}'
-          $installer = "release/Ripple Setup $version.exe"
+          $builtInstaller = "release/Ripple Setup $version.exe"
+          $builtBlockmap = "$builtInstaller.blockmap"
+          $installer = "release/Ripple.Setup.$version.exe"
           $blockmap = "$installer.blockmap"
+          Move-Item -LiteralPath $builtInstaller -Destination $installer
+          Move-Item -LiteralPath $builtBlockmap -Destination $blockmap
           foreach ($file in @($installer, $blockmap)) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
               throw "Expected release asset was not produced: $file"
@@ -97,8 +101,8 @@ jobs:
         with:
           name: ${{ steps.package.outputs.artifact-name }}
           path: |
-            release/Ripple Setup ${{ steps.package.outputs.version }}.exe
-            release/Ripple Setup ${{ steps.package.outputs.version }}.exe.blockmap
+            release/Ripple.Setup.${{ steps.package.outputs.version }}.exe
+            release/Ripple.Setup.${{ steps.package.outputs.version }}.exe.blockmap
             release/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -135,6 +139,6 @@ jobs:
             --verify-tag \
             --title "Ripple v$VERSION" \
             --notes-file release-notes.md \
-            "release/Ripple Setup $VERSION.exe" \
-            "release/Ripple Setup $VERSION.exe.blockmap" \
+            "release/Ripple.Setup.$VERSION.exe" \
+            "release/Ripple.Setup.$VERSION.exe.blockmap" \
             release/SHA256SUMS.txt
